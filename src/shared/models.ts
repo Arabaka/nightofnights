@@ -5,7 +5,7 @@ import type { Request } from "express";
 
 /**
  * The service that a model is hosted on. Distinct from `APIFormat` because some
- * services have interoperable APIs (eg Anthropic/AWS, OpenAI/Azure).
+ * services have interoperable APIs (eg Anthropic/AWS/GCP, OpenAI/Azure).
  */
 export type LLMService =
   | "openai"
@@ -13,6 +13,7 @@ export type LLMService =
   | "google-ai"
   | "mistral-ai"
   | "aws"
+  | "gcp"
   | "azure";
 
 export type OpenAIModelFamily =
@@ -32,6 +33,7 @@ export type MistralAIModelFamily =
   // correspond to specific models. consider them rough pricing tiers.
   "mistral-tiny" | "mistral-small" | "mistral-medium" | "mistral-large";
 export type AwsBedrockModelFamily = "aws-claude" | "aws-claude-opus";
+export type GcpModelFamily = "gcp-claude" | "gcp-claude-opus";
 export type AzureOpenAIModelFamily = `azure-${OpenAIModelFamily}`;
 export type ModelFamily =
   | OpenAIModelFamily
@@ -39,6 +41,7 @@ export type ModelFamily =
   | GoogleAIModelFamily
   | MistralAIModelFamily
   | AwsBedrockModelFamily
+  | GcpModelFamily
   | AzureOpenAIModelFamily;
 
 export const MODEL_FAMILIES = (<A extends readonly ModelFamily[]>(
@@ -61,6 +64,8 @@ export const MODEL_FAMILIES = (<A extends readonly ModelFamily[]>(
   "mistral-large",
   "aws-claude",
   "aws-claude-opus",
+  "gcp-claude",
+  "gcp-claude-opus",
   "azure-turbo",
   "azure-gpt4",
   "azure-gpt4-32k",
@@ -77,6 +82,7 @@ export const LLM_SERVICES = (<A extends readonly LLMService[]>(
   "google-ai",
   "mistral-ai",
   "aws",
+  "gcp",
   "azure",
 ] as const);
 
@@ -93,6 +99,8 @@ export const MODEL_FAMILY_SERVICE: {
   "claude-opus": "anthropic",
   "aws-claude": "aws",
   "aws-claude-opus": "aws",
+  "gcp-claude": "gcp",
+  "gcp-claude-opus": "gcp",
   "azure-turbo": "azure",
   "azure-gpt4": "azure",
   "azure-gpt4-32k": "azure",
@@ -176,6 +184,11 @@ export function getAwsBedrockModelFamily(model: string): AwsBedrockModelFamily {
   return "aws-claude";
 }
 
+export function getGcpModelFamily(model: string): GcpModelFamily {
+  if (model.includes("opus")) return "gcp-claude-opus";
+  return "gcp-claude";
+}
+
 export function getAzureOpenAIModelFamily(
   model: string,
   defaultFamily: AzureOpenAIModelFamily = "azure-gpt4"
@@ -210,9 +223,11 @@ export function getModelFamilyForRequest(req: Request): ModelFamily {
   const model = req.body.model ?? "gpt-3.5-turbo";
   let modelFamily: ModelFamily;
 
-  // Weird special case for AWS/Azure because they serve multiple models from
+  // Weird special case for AWS/GCP/Azure because they serve multiple models from
   // different vendors, even if currently only one is supported.
   if (req.service === "aws") {
+    modelFamily = getAwsBedrockModelFamily(model);
+  } else if (req.service === "gcp") {
     modelFamily = getAwsBedrockModelFamily(model);
   } else if (req.service === "azure") {
     modelFamily = getAzureOpenAIModelFamily(model);
