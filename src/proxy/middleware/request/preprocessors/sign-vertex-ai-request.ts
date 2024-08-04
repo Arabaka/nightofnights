@@ -2,13 +2,9 @@ import express from "express";
 import crypto from "crypto";
 import { keyPool } from "../../../../shared/key-management";
 import { RequestPreprocessor } from "../index";
-import { refreshQuota } from "../../../../shared/users/user-store";
-import {
-  AnthropicV1MessagesSchema,
-} from "../../../../shared/api-schemas";
+import { AnthropicV1MessagesSchema } from "../../../../shared/api-schemas";
 
-const GCP_HOST =
-  process.env.GCP_HOST || "%REGION%-aiplatform.googleapis.com";
+const GCP_HOST = process.env.GCP_HOST || "%REGION%-aiplatform.googleapis.com";
 
 export const signGcpRequest: RequestPreprocessor = async (req) => {
   const serviceValid = req.service === "gcp";
@@ -23,12 +19,9 @@ export const signGcpRequest: RequestPreprocessor = async (req) => {
   const { model, stream } = req.body;
   req.key = keyPool.get(model, "gcp");
 
-  req.log.info(
-    { key: req.key.hash, model },
-    "Assigned GCP key to request"
-  );
+  req.log.info({ key: req.key.hash, model }, "Assigned GCP key to request");
 
-  req.isStreaming = stream === true || stream === "true";
+  req.isStreaming = String(stream) === "true";
 
   // TODO: This should happen in transform-outbound-payload.ts
   // TODO: Support tools
@@ -46,17 +39,8 @@ export const signGcpRequest: RequestPreprocessor = async (req) => {
     .strip()
     .parse(req.body);
   strippedParams.anthropic_version = "vertex-2023-10-16";
-
-  const credential = getCredentialParts(req);
-  const signedJWT = await createSignedJWT(credential.clientEmail, credential.privateKey)
-  const [accessToken, jwtError] = await exchangeJwtForAccessToken(signedJWT)
-  if (accessToken === null) {
-    req.log.warn(
-      { key: req.key.hash, jwtError },
-      "Unable to get the access token"
-    );
-    throw new Error("The access token is invalid.");
-  }
+  
+  const [accessToken, credential] = await getAccessToken(req);
 
   const host = GCP_HOST.replace("%REGION%", credential.region);
   // GCP doesn't use the anthropic-version header, but we set it to ensure the
@@ -76,6 +60,26 @@ export const signGcpRequest: RequestPreprocessor = async (req) => {
     body: JSON.stringify(strippedParams),
   };
 };
+
+async function getAccessToken(
+  req: express.Request
+): Promise<[string, Credential]> {
+  // TODO: access token caching to reduce latency
+  const credential = getCredentialParts(req);
+  const signedJWT = await createSignedJWT(
+    credential.clientEmail,
+    credential.privateKey
+  );
+  const [accessToken, jwtError] = await exchangeJwtForAccessToken(signedJWT);
+  if (accessToken === null) {
+    req.log.warn(
+      { key: req.key!.hash, jwtError },
+      "Unable to get the access token"
+    );
+    throw new Error("The access token is invalid.");
+  }
+  return [accessToken, credential];
+}
 
 async function createSignedJWT(email: string, pkey: string): Promise<string> {
   let cryptoKey = await crypto.subtle.importKey(
@@ -121,7 +125,9 @@ async function createSignedJWT(email: string, pkey: string): Promise<string> {
   return `${unsignedToken}.${encodedSignature}`;
 }
 
-async function exchangeJwtForAccessToken(signed_jwt: string): Promise<[string | null, string]> {
+async function exchangeJwtForAccessToken(
+  signed_jwt: string
+): Promise<[string | null, string]> {
   const auth_url = "https://www.googleapis.com/oauth2/v4/token";
   const params = {
     grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
@@ -155,7 +161,11 @@ function str2ab(str: string): ArrayBuffer {
 function urlSafeBase64Encode(data: string | ArrayBuffer): string {
   let base64: string;
   if (typeof data === "string") {
-    base64 = btoa(encodeURIComponent(data).replace(/%([0-9A-F]{2})/g, (match, p1) => String.fromCharCode(parseInt("0x" + p1, 16))));
+    base64 = btoa(
+      encodeURIComponent(data).replace(/%([0-9A-F]{2})/g, (match, p1) =>
+        String.fromCharCode(parseInt("0x" + p1, 16))
+      )
+    );
   } else {
     base64 = btoa(String.fromCharCode(...new Uint8Array(data)));
   }
@@ -170,7 +180,8 @@ type Credential = {
 };
 
 function getCredentialParts(req: express.Request): Credential {
-  const [projectId, clientEmail, region, rawPrivateKey] = req.key!.key.split(":");
+  const [projectId, clientEmail, region, rawPrivateKey] =
+    req.key!.key.split(":");
   if (!projectId || !clientEmail || !region || !rawPrivateKey) {
     req.log.error(
       { key: req.key!.hash },
@@ -180,7 +191,10 @@ function getCredentialParts(req: express.Request): Credential {
   }
 
   const privateKey = rawPrivateKey
-    .replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\r|\n|\\n/g, '')
+    .replace(
+      /-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\r|\n|\\n/g,
+      ""
+    )
     .trim();
 
   return { projectId, clientEmail, region, privateKey };
